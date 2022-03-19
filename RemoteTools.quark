@@ -1,0 +1,16 @@
+(
+          name: "RemoteTools",
+       summary: "A logging class inspired by python's logging module.",
+        author: "J Chaim Reus",
+     copyright: "J Chaim Reus, 2022",
+       license: "GPL3",
+       version: "0.1.0",
+        schelp: "Logging",
+          test: "Test/Logging_unittest.scd",
+           url: "https://github.com/jreus/RemoteTools",
+  dependencies: [
+              		"Singleton"
+                ],
+  isCompatible: true ,
+         since: "2022"
+)
