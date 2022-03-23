@@ -15,19 +15,33 @@ SignalMonitor : Singleton {
 	var <liveMonitors, <idCount;
 
 	*initClass {
-		defaultAction = {|monitorId, nodeId| "Received Monitor Notification from Monitor: %  Node: %".format(monitorId, nodeId).warn };
+		defaultAction = {|cause, vals, mon| "Received % Signal % from Monitor: %".format(cause, vals, mon).warn };
+		CmdPeriod.add({ SignalMonitor.clearAll });
+	}
+
+
+	// Reset all Signal Monitors
+	*clearAll {
+		SignalMonitor.all.do {|sm|
+			sm.cleanup;
+		};
+	}
+
+	cleanup {
+		oscListener.free;
+		liveMonitors.clear;
+		super.clear;
 	}
 
 	init {
 		"CREATING SignalMonitor: %".format(this.name).warn;
 		registrationId = 0;
 		idCount = 0;
-		liveMonitors = Dictionary.new();
-		listenerId = "signalmonitor_%_listener".format(this.name).asSymbol;
+		liveMonitors = IdentityDictionary.new();
 		listenerAddress = "/signalmonitor_%_addr".format(this.name);
 
-		oscListener = OSCdef(listenerId, {|msg|
-			var mon, monid, nodeid;
+		oscListener = OSCFunc.new({|msg|
+			var mon, monid, nodeid, values;
 			msg.postln;
 			nodeid = msg[1].asInteger;
 			monid = msg[2].asInteger;
@@ -35,23 +49,44 @@ SignalMonitor : Singleton {
 			// If a registration message comes in, register that node as one containing a monitor...
 			mon = liveMonitors.at(monid);
 			if(mon.notNil) {
+				var cause = mon[\type];
 				// We got an alert!
 				if(mon[\node].isNil) {
 					mon[\node] = Node.basicNew(server, nodeid);
 					mon[\node].register(true);
 					mon[\status] = \registered;
+					mon[\nodeid] = nodeid;
+				};
+
+				if(mon[\type] == \badvalues) { // refine cause for badvalues cases
+					var badvals, oob;
+					badvals = msg[3].asInteger;
+					oob = msg[4].asInteger;
+					values = msg[5..];
+					if(oob > 0) {
+						cause = \oob;
+					} {
+						switch(badvals,
+							1, { cause = \NaN },
+							2, { cause = \inf },
+							3, { cause = \denormal },
+							{ cause = \unknown }
+						);
+					};
+				} {
+					values = msg[3..];
 				};
 
 				if(mon[\action].notNil) {
-					mon[\action].value(monid, nodeid);
+					mon[\action].value(cause, values, mon);
 				} {
 					// Run default action...
-					defaultAction.value(monid, nodeid);
+					defaultAction.value(cause, values, mon);
 				};
 
 			} {
 				// Monitor message from an unregistered monitor, use the default monitor action? Or...
-				"Received message from an unregistered monitor %".format(monid).error;
+				"Received message from an unregistered monitor with id: %".format(monid).error;
 				mon = nil;
 			};
 
@@ -72,11 +107,12 @@ SignalMonitor : Singleton {
 	}
 
 	// type is \silence or \badvalues
-	registerMonitor {|type, action|
+	registerMonitor {|type, name, action|
 		var mon;
 		idCount = idCount + 1;
-		"Registered monitor %".format(idCount).warn;
-		mon = Dictionary.newFrom([\id, idCount, \type, type, \action, action, \status, \awaitingNodeId, \node, nil]);
+		if(name.isNil) { name = idCount };
+		"Registered monitor %: %".format(idCount, name).warn;
+		mon = Dictionary.newFrom([\id, idCount, \name, name, \type, type, \action, action, \status, \awaitingNodeId, \node, nil]);
 		liveMonitors.put(idCount, mon);
 		^idCount;
 	}
@@ -86,71 +122,85 @@ SignalMonitor : Singleton {
 
 // Pseudo Ugen, implements silence and DC monitoring with callback function if silence exceeds a certain duration
 MonitorSilence {
-	*kr {| in, maxSilence=120, ampThresh=0.001, monitor=\default, action |
+	*ar {| in, maxSilence=10, ampThresh=0.001, monitor=\default, name=nil, action |
 		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
 		var t_silence, monoin;
 		monAddr = mon.listenerAddress;
-		monId = mon.registerMonitor(\silence, action);
+		monId = mon.registerMonitor(\silence, name, action);
 		if(in.size > 1) { monoin = in.sum } { monoin = in };
 		t_silence = DetectSilence.ar(LeakDC.ar(monoin), ampThresh, maxSilence);
-		^SendReply.kr(T2K.kr(t_silence), monAddr, A2K.kr(in), monId);
+		^SendReply.ar(t_silence, monAddr, in, monId);
 	}
 
-	*ar {}
+	*kr {| in, maxSilence=10, ampThresh=0.001, monitor=\default, name=nil, action |
+		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
+		var t_silence, monoin;
+		monAddr = mon.listenerAddress;
+		monId = mon.registerMonitor(\silence, name, action);
+		if(in.size > 1) { monoin = in.sum } { monoin = in };
+		t_silence = DetectSilence.kr(monoin, ampThresh, maxSilence);
+		^SendReply.kr(t_silence, monAddr, in, monId);
+	}
 }
 
 // Pseudo Ugen, implements badvalues and out-of-bounds monitoring with callback function if bad values detected
 MonitorBadValues {
-	*ar {| in, minValue=(-1.0), maxValue=1.0, resetFreq=0.1, monitor=\default, action |
+
+	*ar {| in, minValue=(-1.0), maxValue=1.0, resetFreq=0.1, monitor=\default, name=nil, action |
 		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
-		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, outofbounds, min, max, t_reset;
+		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, t_reply, outofbounds, min, max, t_reset;
 		monAddr = mon.listenerAddress;
-		monId = mon.registerMonitor(\badvalues, action);
+		monId = mon.registerMonitor(\badvalues, name, action);
 
 		badvals = CheckBadValues.ar(in, post: 0);
-		t_badvals = badvals.sum > 0;
+		t_badvals = (badvals > 0).sum;
+		// TODO: this is a very crude way of doing this, and even will result in incorrect reporting
+		// ideally we would want to get the maximum value of badvals
+		//if(badvals.size > 1) { badvals = badvals.max }; // this unfortunately doesn't work
+		if(badvals.size > 1) { badvals = NumChannels.ar(badvals, 1, false) };
 		safein = Sanitize.ar(in);
 		t_reset = Impulse.ar(resetFreq);
 		min = RunningMin.ar(safein, t_reset);
 		max = RunningMax.ar(safein, t_reset);
 		outofbounds = (min < minValue) + (max > maxValue);
-		//outofbounds = 1 - InRange.ar(in * BinaryOpUGen('==', badvals, 0), minValue, maxValue);
-		t_outofbounds = outofbounds.sum;
-
-		// t_tick = Impulse.ar(1);
-		// ts = Sweep.ar;
-		// sigoob = 1.0 - InRange.ar(sig3, -1.0, 1.0);
-		// t_reset = Impulse.ar(0.5);
-	// for a stereo signal
-	//peak = Peak.ar(sig3 * (1 - t_reset), t_reset).reduce(\max);
-		// peak = Peak.ar(sig3 * (1 - t_reset), t_reset);
-		// delaypeak = Delay1.ar(peak);
-		// t_outofbounds = delaypeak > lim;
-
-		^SendReply.ar(t_badvals + t_outofbounds, monAddr, [badvals[0], badvals[1], outofbounds[0], outofbounds[1], in[0], in[1]], monId);
+		if(outofbounds.size > 1) { outofbounds = outofbounds.sum };
+		t_outofbounds = outofbounds;
+		t_reply = t_badvals + t_outofbounds;
+		^SendReply.ar(t_reply, monAddr, [badvals, outofbounds, in].flatten, monId);
 	}
 
-	*kr {}
+	*kr {| in, minValue=(-1.0), maxValue=1.0, resetFreq=0.1, monitor=\default, name=nil, action |
+		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
+		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, outofbounds, min, max, t_reset;
+		monAddr = mon.listenerAddress;
+		monId = mon.registerMonitor(\badvalues, name, action);
+		badvals = CheckBadValues.kr(in, post: 0);
+		if(badvals.size > 1) { badvals = badvals.max };
+		t_badvals = badvals > 0;
+		safein = Sanitize.kr(in);
+		t_reset = Impulse.kr(resetFreq);
+		min = RunningMin.kr(safein, t_reset);
+		max = RunningMax.kr(safein, t_reset);
+		outofbounds = (min < minValue) + (max > maxValue);
+		if(outofbounds.size > 1) { outofbounds = outofbounds.max };
+		t_outofbounds = outofbounds;
+		^SendReply.kr(t_badvals + t_outofbounds, monAddr, [badvals, outofbounds, in].flatten, monId);
+	}
 }
 
+/*
+USAGE:
 
-// Pseudo Ugens
-// ReplaceBadValues {
-// 	*ar { |in, sub = 0, id = 0,  post = 2|
-// 		var subIndex =  CheckBadValues.ar(in, id, post) > 0;
-// 		// prepare for Select
-// 		sub = sub.asArray.collect { |sub1|
-// 			if (sub1.rate != \audio) { sub = K2A.ar(sub) } { sub };
-// 		};
-// 		^Select.ar(subIndex, [in, sub]);
-// 	}
-// 	*kr { |in, sub = 0, id = 0,  post = 2|
-// 		var subIndex = CheckBadValues.kr(in, id, post) > 0;
-// 		^Select.kr(subIndex, [in, sub]);
-// 	}
-// }
+FileLog.logErrors(true, \test);
+l = FileLog(\test);
+l.maxLength = 10; // don't waste a lot of memory of logging when everything will be written to file
+l.initLogFile("logs/logfile.log".resolveRelative.standardizePath);
+l.info("Oh % %", 1, 2);
+l.critical("AH % %", 9, 21);
+l.warning("ahhuy % %", 9, 21);
+l.error("oyoy % %", 9, 21);
 
-
+*/
 FileLog : Singleton {
 
 	classvar defaultFormatter, splitLineFormatter, onErrorAction, <levels, exceptionHandler;
@@ -237,6 +287,9 @@ FileLog : Singleton {
 				\error, {
 					res = "%".format(item[\string]);
 				},
+				\critical, {
+					res = "%: %".format(item[\level].asString.toUpper, item[\string]);
+				},
 				{
 					res = "%::% %".format(item[\level].asString.toUpper, item[\string]);
 				}
@@ -249,6 +302,7 @@ FileLog : Singleton {
 			switch(logitem[\level],
 				\warning, { fmt.warn },
 				\error, { fmt.error },
+				\critical, { fmt.error },
 				{ fmt.postln }
 			);
 		};
