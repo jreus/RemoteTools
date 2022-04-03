@@ -5,14 +5,14 @@ e.send("sender@gmail.com", "recipient@gmail.com", "Subject - This is a test msg 
 */
 SMTPEmailer : Singleton {
 
-	classvar defaultFileName, defaultMessageFormat, defaultCommand, emailRegexp, defaultAction;
-	var <>mail_protocol, <>smtp_server, <>smtp_port, <>smtp_user, <>smtp_password;
+	classvar defaultFileName, defaultMessageFormat, defaultCommand, emailRegexp, defaultAction, <>debounceTime=1;
+	var <>mail_protocol, <>smtp_server, <>smtp_port, <>smtp_user, <>smtp_password, <last_sent=0;
 
 
 	*initClass {
 		emailRegexp = "([A-Za-z\\.\ \\-]*)?[ ]?[<]?([A-Za-z0-9\\-\\.\\_]+@[A-Za-z\\-\\.]+)[>]?";
 		defaultFileName = "tmp_scemailer_msg.txt";
-		defaultMessageFormat = "From: %\nTo: %\nSubject: %\n\n%";
+		defaultMessageFormat = "From: %\nTo: %\nSubject: %\n\n%\n%";
 		defaultCommand = "curl --url '%://%:%' --ssl-reqd --mail-from '%' --mail-rcpt '%' --upload-file % --user '%:%'";
 		defaultAction = {|exitcode, pid|
 			if(exitcode == 0) {
@@ -23,7 +23,9 @@ SMTPEmailer : Singleton {
 		};
 	}
 
-	init {}
+	// Override to initialize new SMTPEmailer
+	init {
+	}
 
 	// Override this to receive 'settings' parameter from Singleton.new(name, settings)
 	set {| server = nil, port = 465, user = nil, password = nil, protocol = "smtps" |
@@ -47,9 +49,8 @@ SMTPEmailer : Singleton {
 
 	56 - invalid request
 	*/
-
 	send {| from, to, subject, msg, action |
-		var text, cmd, msg_filepath;
+		var text, cmd, msg_filepath, timestamp, now;
 
 		if( from.isNil || to.isNil || subject.isNil || msg.isNil ) {
 			MethodError("From, To, Subject and Message fields must be valid strings.").throw;
@@ -63,19 +64,27 @@ SMTPEmailer : Singleton {
 			action = defaultAction;
 		};
 
-		text = defaultMessageFormat.format(from, to, subject, msg);
-		msg_filepath = defaultFileName.resolveRelative.standardizePath;
-		cmd = defaultCommand.format(mail_protocol, smtp_server, smtp_port, from, to, msg_filepath, smtp_user, smtp_password);
+		now = Process.elapsedTime;
 
-		File.use(msg_filepath, "w", {|fp|
-			fp.write(text);
-		});
+		if((now - last_sent) > debounceTime) {
+			timestamp = Date.getDate.asString;
+			text = defaultMessageFormat.format(from, to, subject, timestamp, msg);
+			msg_filepath = defaultFileName.resolveRelative.standardizePath;
+			cmd = defaultCommand.format(mail_protocol, smtp_server, smtp_port, from, to, msg_filepath, smtp_user, smtp_password);
 
-		cmd.postln;
-		cmd.unixCmd({|exitcode, pid|
-			action.value(exitcode, pid);
-			File.delete(msg_filepath);
-		});
+			File.use(msg_filepath, "w", {|fp|
+				fp.write(text);
+			});
+
+			cmd.postln;
+			cmd.unixCmd({|exitcode, pid|
+				action.value(exitcode, pid);
+				File.delete(msg_filepath);
+			});
+			last_sent = now;
+		} {
+			"IGNORING EMAIL REQUEST! Too many emails sent in too little time!".warn;
+		};
 	}
 
 

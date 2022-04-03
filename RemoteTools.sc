@@ -204,10 +204,12 @@ l.error("oyoy % %", 9, 21);
 FileLog : Singleton {
 
 	classvar defaultFormatter, splitLineFormatter, onErrorAction, <levels, exceptionHandler;
-	var <>actions, <formatters, <>shouldPost = true, <>maxLength = 500;
+	var <actions, <formatters, <actionsByLevel, <>shouldPost = true, <maxLength = 500;
 	var <logfilePath, <fileLogAction, <postLogAction;
 
 	var <lines, <level, levelNum, <splitLines=false, <>unprintedLine="";
+	var <exceptionHistory, <>suppressRepeatExceptions=true, <>suppressRepeatsTimeThresh=10.0;
+
 
 	*initClass {
 		defaultFormatter = {|item, log|
@@ -243,7 +245,9 @@ FileLog : Singleton {
 		);
 	}
 
-	*logErrors {|shouldLog = true, loggerID=\default|
+
+
+	*logErrors {|shouldLog = true, loggerID=\default, errorAction=nil|
 		var rootThread = thisThread, handler;
 
 		while { rootThread.parent.notNil } {
@@ -251,47 +255,70 @@ FileLog : Singleton {
 		};
 
 		if (shouldLog) {
-			exceptionHandler = {|exc|
-				try {
-					FileLog(loggerID).error(exc.errorString.replace("ERROR: ", ""));
-				};
+			var oldExceptionHandler = rootThread.exceptionHandler;
 
-				rootThread.parent.handleError(exc);
+			exceptionHandler = {|exc|
+				{
+					var shouldSuppress=false, log = FileLog(loggerID);
+					shouldSuppress = log.shouldSuppressException(exc);
+
+					//"rootThread: Got exception % with % %".format(exc, log, shouldSuppress).warn;
+
+					if(shouldSuppress) {
+						// Suppress Exception Handling
+						log.error("(Suppressed)" + exc.class + exc.errorString);
+					} {
+						// Report Exception
+						log.error(exc.errorString);
+						if(errorAction.notNil) {
+							errorAction.value(exc);
+						};
+
+						rootThread.parent.handleError(exc);
+					};
+
+				}.try;
 			};
 
 			rootThread.exceptionHandler = exceptionHandler;
 
-			OnError.add(onErrorAction = {
-				FileLog(loggerID, "---");
-			})
+			// onErrorAction = {
+			// 	FileLog(loggerID).critical("A Language Error was Encountered");
+			// };
+			//OnError.add(onErrorAction)
+
 		} {
 			if (rootThread.exceptionHandler == exceptionHandler) {
 				rootThread.exceptionHandler = exceptionHandler = nil;
-			}
+			};
 		}
 	}
 
 	// Override this method to run initializations when a Singleton instance is created
 	init {
 		actions = IdentitySet();
+		actionsByLevel = IdentityDictionary();
 		formatters = Dictionary();
 		lines = LinkedList(maxLength);
+		exceptionHistory = IdentityDictionary();
 		this.level = \info;
 		formatters[\default] = splitLines.if({ splitLineFormatter }, { defaultFormatter });
 		formatters[\post] = {|item, logger|
 			var res;
+			res = ":%: %".format(item[\time].stamp, item[\string]);
+
 			switch(item[\level],
 				\warning, {
-					res = "%".format(item[\string]);
+					res = res;
 				},
 				\error, {
-					res = "%".format(item[\string]);
+					res = res;
 				},
 				\critical, {
-					res = "%: %".format(item[\level].asString.toUpper, item[\string]);
+					res = "(%) %".format(item[\level].asString.toUpper, res);
 				},
 				{
-					res = "%::% %".format(item[\level].asString.toUpper, item[\string]);
+					res = "%: %".format(item[\level].asString.toUpper, res);
 				}
 			);
 			res;
@@ -306,6 +333,15 @@ FileLog : Singleton {
 				{ fmt.postln }
 			);
 		};
+
+		// Add base handlers action..
+		actions.add({|logitem, logger|
+			var fmt = logger.format(logitem, \default);
+			var act = actionsByLevel.at(logitem[\level]);
+			if(act.notNil) {
+				act.value(logitem[\string], logitem[\time].asString);
+			};
+		});
 
 	}
 
@@ -334,6 +370,30 @@ FileLog : Singleton {
 
 	}
 
+	// Returns true if an exception should be suppressed
+	shouldSuppressException {|exc|
+		var res = false, hist, now = Process.elapsedTime;
+		hist = exceptionHistory.at(exc.class);
+		if(hist.isNil) {
+			hist = (
+				lastEncountered: 0,
+				numEncountered: 0
+			);
+			exceptionHistory.put(exc.class, hist);
+		};
+
+		//"FileLog: Got % with history %".format(exc, hist).warn;
+
+		if(suppressRepeatExceptions) {
+			// This is considered a repeat and should be suppressed.
+			res = (now - hist.lastEncountered) < suppressRepeatsTimeThresh;
+		};
+
+		hist.lastEncountered = now;
+		hist.numEncountered = hist.numEncountered + 1;
+
+		^res;
+	}
 
 	splitLines_{|value|
 		splitLines = value;
@@ -343,6 +403,11 @@ FileLog : Singleton {
 		if (splitLines.not and: { formatters[\default] == splitLineFormatter }) {
 			formatters[\default] = defaultFormatter;
 		}
+	}
+
+	maxLength_ {|newval|
+		maxLength = newval;
+		lines = LinkedList(maxLength);
 	}
 
 	level_{|inLevel|
@@ -413,5 +478,15 @@ FileLog : Singleton {
 
 	format {| item, formatter=\default |
 		^formatters[formatter].value(item, this);
+	}
+
+	// Convenience method to add additional actions to logging
+	addHandler {|level, action|
+		if(action.isNil) {
+			actionsByLevel.removeAt(level.asSymbol);
+
+		} {
+			actionsByLevel.put(level.asSymbol, action);
+		};
 	}
 }

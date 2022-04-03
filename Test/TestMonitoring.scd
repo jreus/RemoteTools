@@ -1,9 +1,8 @@
 
-
 (
 a = ();
 a.autoRestart = true;
-FileLog.logErrors(true, \monitor);
+FileLog.logErrors(true, \monitor, {|ex| "A critical error occurred, do something! %".format(ex.errorString).warn });
 a.log = FileLog(\monitor);
 a.log.initLogFile("logs/logfile.log".resolveRelative.standardizePath);
 
@@ -26,29 +25,6 @@ a.reboot = {|e|
 			a.run();
 		};
 	}.fork(AppClock);
-
-	// s.quit({
-	// 	// Success!
-	// 	"Successfully Quit Server!".warn;
-	// 	if(a.autoRestart == true) {
-	// 		"Restart the Server: %".format(s.serverRunning).warn;
-	// 		{
-	// 			//3.wait;
-	// 			//Server.killAll;
-	// 			4.wait;
-	// 			"Reboot".warn;
-	// 			s.waitForBoot {
-	// 				"Hello World".warn;
-	// 				a.run();
-	// 			};
-	// 		}.fork(AppClock);
-	// 	};
-	//
-	// 	}, {
-	// 		// Failure!
-	// 		"Failed to quit server!".error;
-	// });
-
 
 };
 
@@ -160,23 +136,5 @@ s.waitForBoot {
 
 
 
-// m = SignalMonitor(\default);
-// m.liveMonitors;
 
-// ( // Real-time channel scrambling on the server?
-// Ndef(\monitorme, {
-// 	var n = 5, amp = 0.1, freq=200, sig;
-// 	var t_trigs = Impulse.kr(2).dup(n);
-// 	var randomizer = Dshuf((0 .. n-1), inf);
-// 	var indices = Demand.kr(t_trigs, 0, randomizer);
-// 	var freqs = freq * (1..n);
-// 	var oscs = SinOsc.ar(freqs);
-// 	var channels = Select.ar(indices, oscs);
-// 	sig = Splay.ar(channels, level: amp);
-// 	indices.poll(1);
-// 	sig;
-// }).play(outbus: 0);
-//
-// );
-//
 
