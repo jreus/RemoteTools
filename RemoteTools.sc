@@ -41,10 +41,11 @@ SignalMonitor : Singleton {
 		listenerAddress = "/signalmonitor_%_addr".format(this.name);
 
 		oscListener = OSCFunc.new({|msg|
-			var mon, monid, nodeid, values;
+			var mon, monid, nodeid, numchans, values;
 			msg.postln;
 			nodeid = msg[1].asInteger;
 			monid = msg[2].asInteger;
+			numchans = msg[3].asInteger;
 
 			// If a registration message comes in, register that node as one containing a monitor...
 			mon = liveMonitors.at(monid);
@@ -56,13 +57,14 @@ SignalMonitor : Singleton {
 					mon[\node].register(true);
 					mon[\status] = \registered;
 					mon[\nodeid] = nodeid;
+					mon[\numchannels] = numchans;
 				};
 
 				if(mon[\type] == \badvalues) { // refine cause for badvalues cases
-					var badvals, oob;
-					badvals = msg[3].asInteger;
-					oob = msg[4].asInteger;
-					values = msg[5..];
+					var badvals, oob, numchans;
+					badvals = msg[4].asInteger;
+					oob = msg[5].asInteger;
+					values = msg[6..];
 					if(oob > 0) {
 						cause = \oob;
 					} {
@@ -74,7 +76,7 @@ SignalMonitor : Singleton {
 						);
 					};
 				} {
-					values = msg[3..];
+					values = msg[4..];
 				};
 
 				if(mon[\action].notNil) {
@@ -129,7 +131,7 @@ MonitorSilence {
 		monId = mon.registerMonitor(\silence, name, action);
 		if(in.size > 1) { monoin = in.sum } { monoin = in };
 		t_silence = DetectSilence.ar(LeakDC.ar(monoin), ampThresh, maxSilence);
-		^SendReply.ar(t_silence, monAddr, in, monId);
+		^SendReply.ar(t_silence, monAddr, [in.size, in].flatten, monId);
 	}
 
 	*kr {| in, maxSilence=10, ampThresh=0.001, monitor=\default, name=nil, action |
@@ -139,52 +141,55 @@ MonitorSilence {
 		monId = mon.registerMonitor(\silence, name, action);
 		if(in.size > 1) { monoin = in.sum } { monoin = in };
 		t_silence = DetectSilence.kr(monoin, ampThresh, maxSilence);
-		^SendReply.kr(t_silence, monAddr, in, monId);
+		^SendReply.kr(t_silence, monAddr, [in.size, in].flatten, monId);
 	}
 }
+
+
 
 // Pseudo Ugen, implements badvalues and out-of-bounds monitoring with callback function if bad values detected
 MonitorBadValues {
 
-	*ar {| in, minValue=(-1.0), maxValue=1.0, resetFreq=0.1, monitor=\default, name=nil, action |
+	*ar {| in, minValue=(-1.0), maxValue=1.0, resetFreq=1.0, monitor=\default, name=nil, action |
 		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
-		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, t_reply, outofbounds, min, max, t_reset;
+		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, t_reply, outofbounds, t_sustainedoutofbounds, min, max, absmin, absmax, t_reset;
 		monAddr = mon.listenerAddress;
 		monId = mon.registerMonitor(\badvalues, name, action);
 
 		badvals = CheckBadValues.ar(in, post: 0);
 		t_badvals = (badvals > 0).sum;
-		// TODO: this is a very crude way of doing this, and even will result in incorrect reporting
-		// ideally we would want to get the maximum value of badvals
-		//if(badvals.size > 1) { badvals = badvals.max }; // this unfortunately doesn't work
-		if(badvals.size > 1) { badvals = NumChannels.ar(badvals, 1, false) };
+		if(badvals.size > 1) { badvals = badvals.inject(0, {|i,j| i.max(j) }) };
 		safein = Sanitize.ar(in);
 		t_reset = Impulse.ar(resetFreq);
 		min = RunningMin.ar(safein, t_reset);
 		max = RunningMax.ar(safein, t_reset);
+		absmin = RunningMin.ar(safein, 1);
+		absmax = RunningMax.ar(safein, 1);
 		outofbounds = (min < minValue) + (max > maxValue);
 		if(outofbounds.size > 1) { outofbounds = outofbounds.sum };
 		t_outofbounds = outofbounds;
 		t_reply = t_badvals + t_outofbounds;
-		^SendReply.ar(t_reply, monAddr, [badvals, outofbounds, in].flatten, monId);
+		^SendReply.ar(t_reply, monAddr, [in.size, badvals, outofbounds, absmin, absmax, in].flatten, monId);
 	}
 
-	*kr {| in, minValue=(-1.0), maxValue=1.0, resetFreq=0.1, monitor=\default, name=nil, action |
+	*kr {| in, minValue=(-1.0), maxValue=1.0, resetFreq=1.0, monitor=\default, name=nil, action |
 		var monAddr, monId, monregistrationId, mon = SignalMonitor(monitor);
-		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, outofbounds, min, max, t_reset;
+		var safein, t_silence, silence, checkChange, badvals, t_badvals, t_outofbounds, outofbounds, min, max, t_reset, absmin, absmax;
 		monAddr = mon.listenerAddress;
 		monId = mon.registerMonitor(\badvalues, name, action);
 		badvals = CheckBadValues.kr(in, post: 0);
-		if(badvals.size > 1) { badvals = badvals.max };
+		if(badvals.size > 1) { badvals = badvals.inject(0, {|i,j| i.max(j) }) };
 		t_badvals = badvals > 0;
 		safein = Sanitize.kr(in);
 		t_reset = Impulse.kr(resetFreq);
 		min = RunningMin.kr(safein, t_reset);
 		max = RunningMax.kr(safein, t_reset);
+		absmin = RunningMin.kr(safein, 1);
+		absmax = RunningMax.kr(safein, 1);
 		outofbounds = (min < minValue) + (max > maxValue);
 		if(outofbounds.size > 1) { outofbounds = outofbounds.max };
 		t_outofbounds = outofbounds;
-		^SendReply.kr(t_badvals + t_outofbounds, monAddr, [badvals, outofbounds, in].flatten, monId);
+		^SendReply.kr(t_badvals + t_outofbounds, monAddr, [in.size, badvals, outofbounds, absmin, absmax, in].flatten, monId);
 	}
 }
 

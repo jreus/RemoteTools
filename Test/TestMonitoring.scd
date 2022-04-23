@@ -6,6 +6,21 @@ FileLog.logErrors(true, \monitor, {|ex| "A critical error occurred, do something
 a.log = FileLog(\monitor);
 a.log.initLogFile("logs/logfile.log".resolveRelative.standardizePath);
 
+a.emailer = SMTPEmailer(\text,
+	"sh4999.sd.eurovps.com",
+	465,
+	"botta@jonathanreus.com",
+	"botta111BOTT"
+);
+
+a.sendMail = {|e, subject, msg, action|
+	if(action.isNil) {
+		action = {|exit, pid| "COMPLETED SEND WITH EXITCODE: % and PID: %".format(exit, pid).warn}
+	};
+	a.emailer.send("botta@jonathanreus.com", "info@jonathanreus.com", subject, msg, action);
+};
+
+
 a.cleanup = {|e|
 	a.log.warning("Do Cleanup");
 	Ndef.clear(0);
@@ -100,24 +115,37 @@ a.run = {|e|
 		// USE CASES >>
 
 		//LOG BAD VALUES
-		tmp = sig / LFPulse.ar(0.1).range(1.0, 0.0);
-		MonitorBadValues.ar(tmp, name: "m_badValDiv", action: {|cause, vals, mon|
-			a.log.error("Bad values detected in mon %, cause: % in vals: % with monitor: %".format(mon[\name], cause, vals, mon));
-		});
+		// tmp = sig / LFPulse.ar(0.1).range(1.0, 0.0);
+		// MonitorBadValues.ar(tmp, name: "m_badValDiv", action: {|cause, vals, mon|
+		// 	a.log.error("Bad values detected in mon %, cause: % in vals: % with monitor: %".format(mon[\name], cause, vals, mon));
+		// });
 
 		//LOG BAD VALUES + LANGUAGE PARAMS
 		//To test for NaN uncomment and run the line below.
 		//Ndef(\unittests).set(\ksig, -1.sqrt)
-		MonitorBadValues.kr(ksig, name: "m_badvalKsig", action: {|cause, vals, mon|
-			a.log.error("Bad value % in %! Values: %".format(cause, mon[\name], vals));
-		});
+		// MonitorBadValues.kr(ksig, name: "m_badvalKsig", action: {|cause, vals, mon|
+		// 	a.log.error("Bad value % in %! Values: %".format(cause, mon[\name], vals));
+		// });
 
+		// OOB Signal
+		sig = sig * LFSaw.ar(0.1).range(0.5, 10.0);
+		MonitorBadValues.ar(sig, -1.0, 1.0, 1.0, \default, name: "m_badvaluesMon", action: {|cause,vals,mon|
+			var runningmin, runningmax, sigval;
+			runningmin = vals[0..1];
+			runningmax = vals[2..3];
+			sigval = vals[4..5];
+			"Signal Out of bounds! Cause: % \nSigval: %\nMIN: %  MAX: %\nMON: %".format(cause, sigval, runningmin, runningmax, mon).warn
+
+		});
+		sig = sig * 0.1;
 
 		//REBOOT THE PATCH ON SILENCE & LOG
 		sig = sig * Env.linen(1.0, 5.0, 5.0).ar(0, 1.0);
-		MonitorSilence.ar(sig, name: "m_silenceEndChain", maxSilence: 15.0, ampThresh: 0.0001, monitor: \default,
+		MonitorSilence.ar(sig, name: "m_silenceEndChain", maxSilence: 15.0, ampThresh: 0.001, monitor: \default,
 			action: {|cause, vals, mon|
-				a.log.critical("Silence % Detected for 15s at %, something must have blown up on the server!".format(cause, mon));
+				var txt = "Silence % Detected for 15s at % \n Something must have blown up! \n VALS: %".format(cause, mon, vals);
+				a.sendMail("Testing SC - Silence Detected", txt);
+				a.log.critical(txt);
 				a.reboot;
 		});
 		sig * 0.1;
