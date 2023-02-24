@@ -42,7 +42,7 @@ SignalMonitor : Singleton {
 
 		oscListener = OSCFunc.new({|msg|
 			var mon, monid, nodeid, numchans, values;
-			msg.postln;
+			//msg.postln;
 			nodeid = msg[1].asInteger;
 			monid = msg[2].asInteger;
 			numchans = msg[3].asInteger;
@@ -194,6 +194,8 @@ MonitorBadValues {
 }
 
 /*
+TODO: Break this out into a base Logger class and FileLogger
+
 USAGE:
 
 FileLog.logErrors(true, \test);
@@ -242,11 +244,11 @@ FileLog : Singleton {
 
 		levels = (
 			all: -999,
-			debug: 0,
-			info: 1,
-			warning: 3,
-			error: 6,
-			critical: 9
+			debug: 10,
+			info: 20,
+			warning: 30,
+			error: 40,
+			critical: 50
 		);
 	}
 
@@ -416,8 +418,10 @@ FileLog : Singleton {
 	}
 
 	level_{|inLevel|
-		level = inLevel;
-		levelNum = levels[level];
+		if(inLevel.isKindOf(Symbol)) {
+			inLevel = levels[inLevel];
+		};
+		levelNum = inLevel;
 	}
 
 	addEntry {| item |
@@ -433,6 +437,10 @@ FileLog : Singleton {
 
 	info {| str ...items |
 		this.set(str.asString.format(*items), \info)
+	}
+
+	warn {| str ...items |
+		this.set(str.asString.format(*items), \warning)
 	}
 
 	warning {| str ...items |
@@ -462,9 +470,7 @@ FileLog : Singleton {
 				\time: Date.getDate()
 			);
 
-
 			//logItem[\formatted] = this.format(logItem);
-
 			this.addEntry(logItem);
 
 			if (shouldPost) {
