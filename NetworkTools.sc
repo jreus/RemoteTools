@@ -1,4 +1,7 @@
 /*
+Used to use curl to send an email, now uses the more reliable & robust s-nail
+Requires s-nail & urlencode on unix systems!
+
 Usage:
 e = SMTPEmailer(\myemailer, "smtp.gmail.com", 465, "username", "password");
 e.send("sender@gmail.com", "recipient@gmail.com", "Subject - This is a test msg from SC", "Testing..1..2..3\n\nHello from SC!", {|exit, pid| "Completed with exit code %".format(exit).postln});
@@ -13,7 +16,10 @@ SMTPEmailer : Singleton {
 		emailRegexp = "([A-Za-z\\.\ \\-]*)?[ ]?[<]?([A-Za-z0-9\\-\\.\\_]+@[A-Za-z\\-\\.]+)[>]?";
 		defaultFileName = "tmp_scemailer_msg.txt";
 		defaultMessageFormat = "From: %\nTo: %\nSubject: %\n\n%\n%";
+
+		// OLD CURL COMMAND - TODO: See if I can get this to work again!
 		defaultCommand = "curl --url '%://%:%' --ssl-reqd --mail-from '%' --mail-rcpt '%' --upload-file % --user '%:%'";
+
 		defaultAction = {|exitcode, pid|
 			if(exitcode == 0) {
 				"Email Sent Successfully".postln;
@@ -25,6 +31,7 @@ SMTPEmailer : Singleton {
 
 	// Override to initialize new SMTPEmailer
 	init {
+
 	}
 
 	// Override this to receive 'settings' parameter from Singleton.new(name, settings)
@@ -51,6 +58,8 @@ SMTPEmailer : Singleton {
 	*/
 	send {| from, to, subject, msg, action |
 		var text, cmd, msg_filepath, timestamp, now;
+		// using the new s-nail approach.. which seems to be more reliable
+		var sendCommand = "echo -e \"%\" | s-nail -v -r '%' -s \"%\" --set=v15-compat --set=mta=\"%\" '%'";
 
 		if( from.isNil || to.isNil || subject.isNil || msg.isNil ) {
 			MethodError("From, To, Subject and Message fields must be valid strings.").throw;
@@ -67,20 +76,29 @@ SMTPEmailer : Singleton {
 		now = Process.elapsedTime;
 
 		if((now - last_sent) > debounceTime) {
+			var fullserver = "smtp://`urlencode %`:`urlencode %`@%:%".format(smtp_user, smtp_password, smtp_server, smtp_port);
 			timestamp = Date.getDate.asString;
+			// NEW S-NAIL WAY
+			cmd = sendCommand.format(msg.escapeChar($"), from, subject.escapeChar($"), fullserver, to);
+			cmd.postln;
+			cmd.unixCmd({|exitcode, pid| action.value(exitcode, pid) });
+
+			/*
+			OLD CURL WAY
 			text = defaultMessageFormat.format(from, to, subject, timestamp, msg);
 			msg_filepath = defaultFileName.resolveRelative.standardizePath;
 			cmd = defaultCommand.format(mail_protocol, smtp_server, smtp_port, from, to, msg_filepath, smtp_user, smtp_password);
-
 			File.use(msg_filepath, "w", {|fp|
 				fp.write(text);
 			});
-
 			cmd.postln;
 			cmd.unixCmd({|exitcode, pid|
 				action.value(exitcode, pid);
 				File.delete(msg_filepath);
 			});
+			*/
+
+
 			last_sent = now;
 		} {
 			"IGNORING EMAIL REQUEST! Too many emails sent in too little time!".warn;

@@ -255,50 +255,44 @@ FileLog : Singleton {
 
 
 	*logErrors {|shouldLog = true, loggerID=\default, errorAction=nil|
-		var rootThread = thisThread, handler;
-
+		var rootThread = thisThread;
+		var handler;
 		while { rootThread.parent.notNil } {
 			rootThread = rootThread.parent;
 		};
-
-		if (shouldLog) {
+		if(shouldLog) {
 			var oldExceptionHandler = rootThread.exceptionHandler;
-
 			exceptionHandler = {|exc|
-				{
-					var shouldSuppress=false, log = FileLog(loggerID);
-					shouldSuppress = log.shouldSuppressException(exc);
+				var shouldSuppress=false;
+				var log = FileLog(loggerID);
+				shouldSuppress = log.shouldSuppressException(exc);
 
-					//"rootThread: Got exception % with % %".format(exc, log, shouldSuppress).warn;
+				//"rootThread: Got exception % with % %".format(exc, log, shouldSuppress).warn;
 
-					if(shouldSuppress) {
-						// Suppress Exception Handling
-						log.error("(Suppressed)" + exc.class + exc.errorString);
-					} {
-						// Report Exception
-						log.error(exc.errorString);
-						if(errorAction.notNil) {
-							errorAction.value(exc);
-						};
-
-						rootThread.parent.handleError(exc);
+				if(shouldSuppress) {
+					// Suppress Exception Handling
+					log.error("(Suppressed)" + exc.class + exc.errorString);
+				} {
+					// Report Exception
+					log.error("Handled: %".format(exc.errorString));
+					if(errorAction.notNil) {
+						errorAction.value(exc);
 					};
+					rootThread.handleError(exc);
+				};
 
-				}.try;
-			};
+			}.try;
 
 			rootThread.exceptionHandler = exceptionHandler;
-
 			// onErrorAction = {
 			// 	FileLog(loggerID).critical("A Language Error was Encountered");
 			// };
 			//OnError.add(onErrorAction)
-
 		} {
 			if (rootThread.exceptionHandler == exceptionHandler) {
 				rootThread.exceptionHandler = exceptionHandler = nil;
 			};
-		}
+		};
 	}
 
 	// Override this method to run initializations when a Singleton instance is created
