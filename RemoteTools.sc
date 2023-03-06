@@ -418,12 +418,33 @@ FileLog : Singleton {
 		levelNum = inLevel;
 	}
 
+	// Add an entry to the log history
 	addEntry {| item |
 		lines.add(item);
 		if (lines.size() > maxLength) {
 			lines.popFirst();
 		}
 	}
+
+	/*
+	gets most recent N log messages or less
+	if N messages do not exist then returns whatever is available
+	*/
+	getHistory {|previous=100|
+		var loghistory, idxstart;
+		idxstart = lines.size - previous;
+		if(idxstart < 0) { idxstart = 0 };
+		^lines.copyToEnd(idxstart);
+	}
+
+	// Same as getHistory, but returns a readable log string for humans
+	getHistoryAsString {|previous=100|
+		var loghistory = this.getHistory(previous:previous);
+		loghistory = loghistory.collect {|line| "%:%: %".format(line.time.stamp, line.level.toUpper, line.string) };
+		^(loghistory.join($\n));
+	}
+
+
 
 	debug {| str ...items |
 		this.set(str.asString.format(*items), \debug)

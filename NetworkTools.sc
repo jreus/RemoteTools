@@ -6,10 +6,18 @@ Usage:
 e = SMTPEmailer(\myemailer, "smtp.gmail.com", 465, "username", "password");
 e.send("sender@gmail.com", "recipient@gmail.com", "Subject - This is a test msg from SC", "Testing..1..2..3\n\nHello from SC!", {|exit, pid| "Completed with exit code %".format(exit).postln});
 */
+
+MailError : Error {}
+
 SMTPEmailer : Singleton {
 
 	classvar defaultFileName, defaultMessageFormat, defaultCommand, emailRegexp, defaultAction, <>debounceTime=1;
 	var <>mail_protocol, <>smtp_server, <>smtp_port, <>smtp_user, <>smtp_password, <last_sent=0;
+
+	// Meta parameters
+	var <>emailSubjectPrefix;
+	var <>maxEmails = 100; // Maximum number of emails to be sent by this SMTPEmailer
+	var <sentEmails = 0; // Number of emails sent thusfar
 
 
 	*initClass {
@@ -50,7 +58,7 @@ SMTPEmailer : Singleton {
 		mail_protocol=protocol;
 	}
 
-	/* Send an email
+	/* Send an email base function
 	UNIX EXIT CODES
 	https://www.cyberciti.biz/faq/linux-bash-exit-status-set-exit-statusin-bash/
 
@@ -105,5 +113,48 @@ SMTPEmailer : Singleton {
 		};
 	}
 
+	/*
+	High level send function that keeps track of messages sent by this SMTPEmailer
+	and adds a subject prefix. Things I have found useful in remote headless application settings.
+
+	subject  The subject of the message, sans any subject prefix stored in this.emailSubjectPrefix
+	message  The message to send
+	incrementCount By how many messages should this increment the internally stored record of sent messages
+	               usually 1, 0 if you don't want this message to count against the maximum number of messages
+	force If true, ignores email count and sends no matter what.
+	*/
+	sendMail {|from, to, subject, message, incrementCount=1, force=false|
+		warn("Sending % of maximum % emails this session".format(sentEmails + 1, maxEmails));
+		if( force.or { sentEmails < maxEmails } ) {
+			if(sentEmails == (maxEmails - 1)) {
+				subject = "((FINAL EMAIL))" + subject;
+			};
+
+			if(emailSubjectPrefix.notNil) {
+				subject = "%: %".format(emailSubjectPrefix, subject);
+			};
+			this.send(
+				from: from,
+				to: to,
+				subject: subject,
+				msg: message,
+				action: {|exit, pid|
+					if(exit != 0) {
+						var errmsg = "Error sending email! Got exitcode: % and pid: % from s-nail".format(exit, pid);
+						error(errmsg);
+						MailError(errmsg).throw;
+					} {
+						warn("Sent email with exitcode: % and pid: %".format(exit, pid));
+					};
+			});
+
+			sentEmails = sentEmails+incrementCount;
+		} {
+			MailError("Reached Maximum Emails Sent! Ignoring future calls to sendMail").throw;
+		};
+	}
+
+	// reset number of sent emails
+	resetSentCount { sentEmails = 0; }
 
 }
