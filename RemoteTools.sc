@@ -440,7 +440,7 @@ FileLog : Singleton {
 	// Same as getHistory, but returns a readable log string for humans
 	getHistoryAsString {|previous=100|
 		var loghistory = this.getHistory(previous:previous);
-		loghistory = loghistory.collect {|line| "%:%: %".format(line.time.stamp, line.level.toUpper, line.string) };
+		loghistory = loghistory.collect {|line| "%:%: %".format(line.time.stamp, line.level.asString.toUpper, line.string) };
 		^(loghistory.join($\n));
 	}
 
